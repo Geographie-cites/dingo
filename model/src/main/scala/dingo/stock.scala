@@ -39,7 +39,7 @@ object stock:
       eq
 
 
-    def read(population: File): IArray[IArray[Double]] =
+    def read(population: File, infected: Double): IArray[IArray[Double]] =
       val populationValue =
         population.lines.drop(1).map: l =>
           val c = l.split(",")
@@ -49,7 +49,11 @@ object stock:
       val maxId = populationValue.keys.max
 
       IArray.tabulate(maxId + 1, Stock.dimension): (i, s) =>
-        if s == 0 then populationValue.getOrElse(i, 0.0) else 0.0
+        val pop = populationValue.getOrElse(i, 0.0)
+        s match
+          case 0 => pop * 1 - infected
+          case 1 => pop * infected
+          case _ => 0.0
 
   object Integration:
     def apply(equations: Stock.DynamicEquation): Integration = new Integration(equations)

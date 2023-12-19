@@ -31,7 +31,7 @@ import io.circe.yaml
 
 import scala.annotation.tailrec
 
-case class ModelParameters(beta: Double, gama: Double, integrationStep: Double)
+case class ModelParameters(beta: Double, gama: Double, infectedRatio: Double, integrationStep: Double)
 
 
 @main def model(args: String*) =
@@ -88,7 +88,7 @@ def run(
     cells.map: c =>
       Stock.sir(modelParameters.beta, modelParameters.gama)
 
-  val stock = Stock.read(populationFile.toScala)
+  val stock = Stock.read(populationFile.toScala, modelParameters.infectedRatio)
 
   def world = World(cells, stock, sir)
 
