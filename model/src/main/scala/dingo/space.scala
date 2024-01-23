@@ -19,6 +19,7 @@ package dingo
 
 import better.files.*
 import dingo.agent.*
+import dingo.agent.Human.Serology
 
 object space:
   case class Cell(id: Int, quadKey: Long)
@@ -47,5 +48,24 @@ object space:
         result(l) += ha
 
       result map { _.toArray }
+
+    case class ByCell(susceptible: Int, exposed: Int, infected: Int, recovered: Int)
+
+    def countByCell(world: World) =
+      val result = Array.ofDim[Int](world.cells.size, 4)
+      for
+        ha <- world.population
+        h = Human.unpack(ha)
+      do
+        val current = result(h.location)(h.serology.ordinal)
+        result(h.location)(h.serology.ordinal) = current + 1
+
+      result.map: r =>
+        ByCell(
+          susceptible = r(Serology.S.ordinal),
+          exposed = r(Serology.E.ordinal),
+          infected = r(Serology.I.ordinal),
+          recovered = r(Serology.R.ordinal)
+        )
 
   case class World(cells: IArray[Cell], population: Population)

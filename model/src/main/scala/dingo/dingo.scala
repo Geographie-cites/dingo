@@ -119,15 +119,31 @@ def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, mo
     then (t / 2 + firstDay, 0)
     else (t / 2 + firstDay, 8 * 3600)
 
+  def contaminateHuman(world: World) =
+    val infected = Array.ofDim[Int](world.cells.length)
+    val total = Array.ofDim[Int](world.cells.length)
 
-//  def simulateDynamic(world: World) =
-//    def newStocks =
-//      (world.stocks zip world.dynamic).map: (s, d) =>
-//        if s.forall(_ == 0.0)
-//        then s
-//        else Integration(d).integrate(, modelParameters.integrationStep, 12.0)
-//
-//    world.copy(stocks = newStocks)
+    world.population.foreach: h =>
+      val humanValue = Human.packedIso.reverse.get(h)
+      total(humanValue.location) = total(humanValue.location) + 1
+      humanValue.serology match
+        case Serology.I => infected(humanValue.location) = infected(humanValue.location) + 1
+        case _ =>
+
+    val newPopulation =
+      world.population.map: h =>
+        val humanValue = Human.packedIso.reverse.get(h)
+        humanValue.serology match
+          case Serology.S =>
+            val ratio = infected(humanValue.location).toDouble / total(humanValue.location)
+            val newHuman =
+              if random.nextDouble() < ratio * modelParameters.contamination then humanValue.copy(serology = Serology.E, update = modelParameters.exposedDuration.toByte)
+              else humanValue
+            Human.pack(newHuman)
+          case _ => h
+
+    world.copy(population = newPopulation)
+
 
   def updateSerology(sec: Int)(world: World) =
     def newPopulation =
@@ -184,45 +200,29 @@ def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, mo
 
     world.copy(population = IArray.unsafeFromArray(newPopulation.toArray))
 
-//
-//      val moving = indexedPopulation
-//      val originStock = newStocks(m.from)
-//      val moving = originStock.map(_ * m.ratio)
-//
-//      for i <- moving.indices
-//      do
-//        newStocks(m.from)(i) =
-//          val v = originStock(i)
-//          v - moving(i)
-//
-//        newStocks(to)(i) =
-//          val v = newStocks(to)(i)
-//          v + moving(i)
-//
-//    world.copy(stocks = IArray.unsafeFromArray(newStocks.map(IArray.unsafeFromArray)))
-
   def evolve(t: Int, moves: Array[Move]): World => World =
     val (d, s) = time(t)
     assert:
       moves.head.second == s && moves.head.date == d
 
-    moveAgents(moves) andThen
-      updateSerology(s)
-
-  //    simulateDynamic andThen
-//      move(moves)
+    updateSerology(s) andThen
+      contaminateHuman andThen
+      moveAgents(moves)
 
   @tailrec def step(world: World, t: Int, moves: Iterator[Array[Move]]): World =
 
-//    resultWriter.foreach: w =>
-//      for
-//        (s, i) <- world.stocks.zipWithIndex
-//      do w.append(s"$day,$sec,$i,${s.mkString(",")}\n")
+    val (day, sec) = time(t)
+
+    if sec == 0
+    then
+      resultWriter.foreach: w =>
+        for
+          (c, i) <- World.countByCell(world).zipWithIndex
+        do w.append(s"$day,$sec,$i,${c.susceptible},${c.exposed},${c.infected},${c.recovered}\n")
 
     if !moves.hasNext
     then world
     else
-      val (day, sec) = time(t)
       info(s"simulate day $day sec $sec")
       val newWorld = evolve(t, moves.next())(world)
       step(newWorld, t + 1, moves)
