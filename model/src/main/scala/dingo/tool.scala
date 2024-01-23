@@ -1,7 +1,9 @@
 package dingo
 
+import scala.reflect.ClassTag
+
 /*
- * Copyright (C) 2023 Romain Reuillon
+ * Copyright (C) 2024 Romain Reuillon
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -17,16 +19,18 @@ package dingo
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+object tool:
+  /** standard C-style for loop */
+  inline def loop[A](
+    inline start: A,
+    inline condition: A => Boolean,
+    inline advance: A => A)(inline loopBody: A => Any): Unit =
+    var a = start
+    while condition(a) do
+      loopBody(a)
+      a = advance(a)
 
-import io.circe.Codec
-
-object move:
-  object Move:
-    case class To(destination: Option[Int], ratio: Double) derives Codec.AsObject
-
-  case class Move(
-    from: Int,
-    date: Int,
-    second: Int,
-    to: Seq[Move.To]) derives Codec.AsObject
-
+  def iteratorTakeWhile[T: ClassTag](b: collection.BufferedIterator[T], condition: T => Boolean) =
+    val res = collection.mutable.ArrayBuffer[T]()
+    while b.hasNext && condition(b.head) do res += b.next
+    res.toArray

@@ -18,7 +18,7 @@ package dingo
  */
 
 import better.files.*
-import stock.*
+import dingo.agent.*
 
 object space:
   case class Cell(id: Int, quadKey: Long)
@@ -34,4 +34,18 @@ object space:
 
       IArray.unsafeFromArray(result.toArray)
 
-  case class World(cells: IArray[Cell], stocks: IArray[Stock.Stock], dynamic: IArray[Stock.DynamicEquation])
+    def indexPopulation(world: World) =
+      val result = Array.fill(world.cells.size)(new collection.mutable.ArrayBuffer[Human.Packed](1000))
+
+      tool.loop(
+        0,
+        _ < world.population.length,
+        _ + 1
+      ): i =>
+        val ha = world.population(i)
+        val l = Human.unpackLocation(ha)
+        result(l) += ha
+
+      result map { _.toArray }
+
+  case class World(cells: IArray[Cell], population: Population)

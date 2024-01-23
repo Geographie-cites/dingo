@@ -74,34 +74,44 @@ import dingo.move.*
       val populationFile = resultDirectory / "population.csv"
       populationFile.delete(swallowIOExceptions = true)
 
-      populationFile.append("cell,size\n")
+      populationFile.append("cell,S,E,I,R\n")
 
       val populationData = firstStep.groupBy(_(0)).map((k, v) => index(k) -> v.map(_(3).toInt).sum)
       val scaling = parameter.initialPopulation.get.toDouble / populationData.values.sum
 
-      for i <- index.values.toSeq.sorted
+      for index <- index.values.toSeq.sorted
       do
-        val pop = populationData.getOrElse(i, 0)
-        populationFile.append(s"$i,${pop * scaling}\n")
+        val pop = populationData.getOrElse(index, 0)
+        val scaledPop = pop * scaling
+        val s = (scaledPop * 0.2).round
+        val e = (scaledPop * 0.2).round
+        val i = (scaledPop * 0.2).round
+        val r = (scaledPop * 0.4).round
+        populationFile.append(s"$index,$s,$e,$i,$r\n")
 
     def generateMatrix(index: Index) =
       val moveMatrixFile = resultDirectory / "move-matrix.mjson"
       moveMatrixFile.delete(swallowIOExceptions = true)
 
-      def parseMoves(columns: Array[String], totalNumber: Int, index: Index) =
-        val dateElements = columns(2).filterNot(_ == '"').split(" ")
+      def movesFromCell(moves: Seq[Array[String]]) =
+        moves.groupBy(_(0)).toSeq.sortBy(_(0))
+
+      def parseMoves(data: (String, Seq[Array[String]]), date: Long, time: Int, index: Index): Move =
+        val (from, lines) = data
+        val total = lines.map(_(3).toInt).sum
+        val byDestination = lines.groupBy(l => index.get(l(1))).view.mapValues(_.map(_(3).toInt).sum.toDouble / total)
+        val to = byDestination.toSeq.map((to, r) => Move.To(to, r))
+        Move(from = index(from), to = to, date = date.toInt, second = time)
+
+      def nextStep(i: collection.BufferedIterator[Array[String]]) =
+        val firstDate = i.head(2)
+        val dateElements = firstDate.filterNot(_ == '"').split(" ")
         val df = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         val date = LocalDate.parse(dateElements(0), df).toEpochDay
         val time = LocalTime.parse(dateElements(1)).toSecondOfDay
-        val number = columns(3).toInt
-        Move(from = index(columns(0)), to = index.get(columns(1)), date = date.toInt, second = time, number = number, ratio = number.toDouble / totalNumber)
+        (dingo.tool.iteratorTakeWhile(i, m => m(2) == firstDate), date, time)
 
-      def nextStep(i: Iterator[Array[String]]) =
-        val firstMove = i.next()
-        val firstDate = firstMove(2)
-        Seq(firstMove) ++ i.takeWhile(m => m(2) == firstDate)
-
-      val lineIterator = parameter.moveFile.get.toScala.lines.drop(1).iterator.map(_.split(","))
+      val lineIterator = parameter.moveFile.get.toScala.lines.drop(1).iterator.map(_.split(",")).buffered
 
       while
         lineIterator.hasNext
@@ -109,10 +119,11 @@ import dingo.move.*
         import io.circe.*
         import io.circe.syntax.*
 
-        val slice = nextStep(lineIterator)
-        val total = slice.map(_(3).toInt).sum
+        val (slice, date, time) = nextStep(lineIterator)
+        println(s"$date $time")
+        val movesByCell = movesFromCell(slice)
 
-        moveMatrixFile.appendLine(slice.map(parseMoves(_, total, index)).asJson.noSpaces)
+        moveMatrixFile.appendLine(movesByCell.map(parseMoves(_, date, time, index)).asJson.noSpaces)
 
     val index = generateCellIndex
     generatePopulation(index)

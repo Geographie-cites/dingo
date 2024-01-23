@@ -19,9 +19,13 @@ package dingo
 
 import java.io.{File, Writer}
 import better.files.*
+import dingo.agent.Human
 import dingo.move.Move
-import dingo.stock.{Integration, Stock}
-import dingo.stock.Stock.DynamicEquation
+
+import scala.collection.mutable.ArrayBuffer
+import scala.util.Random
+//import dingo.stock.{Integration, Stock}
+//import dingo.stock.Stock.DynamicEquation
 import scopt.*
 import scribe.*
 import space.*
@@ -31,7 +35,7 @@ import io.circe.yaml
 
 import scala.annotation.tailrec
 
-case class ModelParameters(beta: Double, gama: Double, infectedRatio: Double, integrationStep: Double)
+case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: Int)
 
 
 @main def model(args: String*) =
@@ -67,13 +71,16 @@ case class ModelParameters(beta: Double, gama: Double, infectedRatio: Double, in
     val modelParameters =
       yaml.parser.parse(parameter.modelParameters.get.toScala.contentAsString).toTry.get.as[ModelParameters].toTry.get
 
+    val random = scala.util.Random(modelParameters.seed)
+
     run(
       modelParameters = modelParameters,
       cellIndex = parameter.cellIndex.get,
       cellTypology = parameter.cellTypology.get,
       populationFile = parameter.population.get,
       moveMatrixFile = parameter.moveMatrix.get,
-      resultFile = parameter.resultFile)
+      resultFile = parameter.resultFile,
+      random = random)
 
 def run(
   modelParameters: ModelParameters,
@@ -81,16 +88,14 @@ def run(
   cellTypology: File,
   populationFile: File,
   moveMatrixFile: File,
-  resultFile: Option[File]) =
+  resultFile: Option[File],
+  random: Random) =
   val cells: IArray[Cell] = World.readCells(cellIndex.toScala)
 
-  val sir =
-    cells.map: c =>
-      Stock.sir(modelParameters.beta, modelParameters.gama)
 
-  val stock = Stock.read(populationFile.toScala, modelParameters.infectedRatio)
+  def population = Human.read(populationFile.toScala)
 
-  def world = World(cells, stock, sir)
+  def world = World(cells, population)
 
   val (firstDay, second) =
     val l = moveMatrixFile.toScala.lines.head
@@ -103,68 +108,103 @@ def run(
       parser.decode[Array[Move]](l).toTry.get
 
   val resultWriter = resultFile.map(_.toScala.newBufferedWriter)
-  try simulation(world, modelParameters, firstDay, moves, resultWriter)
+  try simulation(world, modelParameters, firstDay, moves, resultWriter, random)
   finally
     resultWriter.foreach(_.close())
 
-def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, moves: Iterator[Array[Move]], resultWriter: Option[Writer]) =
+def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, moves: Iterator[Array[Move]], resultWriter: Option[Writer], random: Random) =
   def time(t: Int) =
     if t % 2 == 0
     then (t / 2 + firstDay, 0)
     else (t / 2 + firstDay, 8 * 3600)
 
-  def simulateDynamic(world: World) =
-    def newStocks =
-      (world.stocks zip world.dynamic).map: (s, d) =>
-        if s.forall(_ == 0.0)
-        then s
-        else Integration(d).integrate(s, modelParameters.integrationStep, 12.0)
 
-    world.copy(stocks = newStocks)
+//  def simulateDynamic(world: World) =
+//    def newStocks =
+//      (world.stocks zip world.dynamic).map: (s, d) =>
+//        if s.forall(_ == 0.0)
+//        then s
+//        else Integration(d).integrate(s, modelParameters.integrationStep, 12.0)
+//
+//    world.copy(stocks = newStocks)
 
-  def move(moves: Array[Move])(world: World) =
-    val newStocks: Array[Array[Double]] =
-      Array.tabulate(world.stocks.length, Stock.dimension): (x, y) =>
-        world.stocks(x)(y)
+  def updateSerology(world: World) =
+    world
+
+  def moveAgents(moves: Array[Move])(world: World): World =
+    val indexedPopulation = World.indexPopulation(world)
+    val newPopulation = new ArrayBuffer[Human.Packed](world.population.length)
+    val indexedMoves =
+      moves.groupBy(_.from).mapValues: p =>
+        assert(p.size == 1)
+        p.head
 
     for
-      m <- moves
-      to <- m.to.toSeq
+      cell <- 0 until world.cells.length
     do
-      val originStock = newStocks(m.from)
-      val moving = originStock.map(_ * m.ratio)
+      indexedMoves.get(cell) match
+        case Some(m) =>
+          val cellPopulation = random.shuffle(indexedPopulation(cell))
+          val cellSize = cellPopulation.size
 
-      for i <- moving.indices
-      do
-        newStocks(m.from)(i) =
-          val v = originStock(i)
-          v - moving(i)
+          val populationIterator = cellPopulation.iterator
+          for to <- random.shuffle(m.to)
+          do
+            val moving = populationIterator.take(Math.round(to.ratio * cellSize).toInt)
+            to.destination match
+              case Some(destination) => newPopulation.addAll(moving.map(Human.location.replace(destination.toShort)))
+              case None =>
+                // For now exiting agents are keep steady
+                newPopulation.addAll(moving)
 
-        newStocks(to)(i) =
-          val v = newStocks(to)(i)
-          v + moving(i)
+          newPopulation.addAll(populationIterator)
 
-    world.copy(stocks = IArray.unsafeFromArray(newStocks.map(IArray.unsafeFromArray)))
+        case None => newPopulation.addAll(indexedPopulation(cell))
 
-  def evolve(t: Int, moves: Array[Move]) =
+    assert(newPopulation.length == world.population.length, s"${newPopulation.length} ${world.population.length}")
+
+    world.copy(population = IArray.unsafeFromArray(newPopulation.toArray))
+
+//
+//      val moving = indexedPopulation
+//      val originStock = newStocks(m.from)
+//      val moving = originStock.map(_ * m.ratio)
+//
+//      for i <- moving.indices
+//      do
+//        newStocks(m.from)(i) =
+//          val v = originStock(i)
+//          v - moving(i)
+//
+//        newStocks(to)(i) =
+//          val v = newStocks(to)(i)
+//          v + moving(i)
+//
+//    world.copy(stocks = IArray.unsafeFromArray(newStocks.map(IArray.unsafeFromArray)))
+
+  def evolve(t: Int, moves: Array[Move]): World => World =
     assert:
       val (d, s) = time(t)
       moves.head.second == s && moves.head.date == d
 
-    simulateDynamic andThen
-      move(moves)
+    moveAgents(moves)
+
+  //    simulateDynamic andThen
+//      move(moves)
 
   @tailrec def step(world: World, t: Int, moves: Iterator[Array[Move]]): World =
-    val (day, sec) = time(t)
-    info(s"simulate day $day sec $sec")
 
-    resultWriter.foreach: w =>
-      for
-        (s, i) <- world.stocks.zipWithIndex
-      do w.append(s"$day,$sec,$i,${s.mkString(",")}\n")
+//    resultWriter.foreach: w =>
+//      for
+//        (s, i) <- world.stocks.zipWithIndex
+//      do w.append(s"$day,$sec,$i,${s.mkString(",")}\n")
 
     if !moves.hasNext
     then world
-    else step(evolve(t, moves.next())(world), t + 1, moves)
+    else
+      val (day, sec) = time(t)
+      info(s"simulate day $day sec $sec")
+      val newWorld = evolve(t, moves.next())(world)
+      step(newWorld, t + 1, moves)
 
   step(world, 0, moves)
