@@ -27,6 +27,9 @@ object agent:
   type Population = IArray[Human.Packed]
 
   object Human:
+    object Serology:
+      val noUpdate = -1.toByte
+      
     enum Serology:
       case S, E, I, R
 
@@ -54,9 +57,9 @@ object agent:
 
     val packedIso = Iso[Human, Packed](pack)(unpack)
     val location = packedIso.reverse andThen Focus[Human](_.location)
-//    val serology = packedIso.reverse andThen Focus[Human](_.serology)
+    val serology = packedIso.reverse andThen Focus[Human](_.serology)
 
-    def read(populationFile: File): Population =
+    def read(populationFile: File, parameters: ModelParameters): Population =
       val population = new collection.mutable.ArrayBuffer[Human.Packed](10000000)
 
       for
@@ -69,10 +72,10 @@ object agent:
         val i = colums(3).toInt
         val r = colums(4).toInt
 
-        for _ <- 0 until s do population += pack(Human(l, Serology.S, -1.toByte))
-        for _ <- 0 until e do population += pack(Human(l, Serology.E, -1.toByte))
-        for _ <- 0 until i do population += pack(Human(l, Serology.I, -1.toByte))
-        for _ <- 0 until r do population += pack(Human(l, Serology.R, -1.toByte))
+        for _ <- 0 until s do population += pack(Human(l, Serology.S, Serology.noUpdate))
+        for _ <- 0 until e do population += pack(Human(l, Serology.E, parameters.exposedDuration.toByte))
+        for _ <- 0 until i do population += pack(Human(l, Serology.I, parameters.infectedDuration.toByte))
+        for _ <- 0 until r do population += pack(Human(l, Serology.R, Serology.noUpdate))
 
       IArray.unsafeFromArray(population.toArray)
 

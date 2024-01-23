@@ -20,6 +20,7 @@ package dingo
 import java.io.{File, Writer}
 import better.files.*
 import dingo.agent.Human
+import dingo.agent.Human.{Serology, serology}
 import dingo.move.Move
 
 import scala.collection.mutable.ArrayBuffer
@@ -35,7 +36,7 @@ import io.circe.yaml
 
 import scala.annotation.tailrec
 
-case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: Int)
+case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: Int, contamination: Double)
 
 
 @main def model(args: String*) =
@@ -93,7 +94,7 @@ def run(
   val cells: IArray[Cell] = World.readCells(cellIndex.toScala)
 
 
-  def population = Human.read(populationFile.toScala)
+  def population = Human.read(populationFile.toScala, modelParameters)
 
   def world = World(cells, population)
 
@@ -124,12 +125,30 @@ def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, mo
 //      (world.stocks zip world.dynamic).map: (s, d) =>
 //        if s.forall(_ == 0.0)
 //        then s
-//        else Integration(d).integrate(s, modelParameters.integrationStep, 12.0)
+//        else Integration(d).integrate(, modelParameters.integrationStep, 12.0)
 //
 //    world.copy(stocks = newStocks)
 
-  def updateSerology(world: World) =
-    world
+  def updateSerology(sec: Int)(world: World) =
+    def newPopulation =
+      world.population.map: h =>
+        val update = Human.unpackUpdate(h)
+        if update == Serology.noUpdate
+        then h
+        else
+          if update == 0
+          then
+            Human.packedIso.reverse.modify: h =>
+              h.serology match
+                case Serology.E => h.copy(serology = Serology.I, update = modelParameters.infectedDuration.toByte)
+                case Serology.I => h.copy(serology = Serology.R, update = Serology.noUpdate)
+                case s => throw new RuntimeException(s"Serology $s is not supposed to be updated")
+            .apply(h)
+          else Human.packedIso.reverse.modify(h => h.copy(update = (h.update - 1).toByte))(h)
+
+    if sec == 0
+    then world.copy(population = newPopulation)
+    else world
 
   def moveAgents(moves: Array[Move])(world: World): World =
     val indexedPopulation = World.indexPopulation(world)
@@ -183,11 +202,12 @@ def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, mo
 //    world.copy(stocks = IArray.unsafeFromArray(newStocks.map(IArray.unsafeFromArray)))
 
   def evolve(t: Int, moves: Array[Move]): World => World =
+    val (d, s) = time(t)
     assert:
-      val (d, s) = time(t)
       moves.head.second == s && moves.head.date == d
 
-    moveAgents(moves)
+    moveAgents(moves) andThen
+      updateSerology(s)
 
   //    simulateDynamic andThen
 //      move(moves)
