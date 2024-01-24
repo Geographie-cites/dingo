@@ -32,7 +32,8 @@ import scala.collection.mutable.ListBuffer
   case class Parameter(
     mobilitiesFile: Option[java.io.File] = None,
     resultFile: Option[java.io.File] = None,
-    censusFile: Option[java.io.File] = None)
+    censusFile: Option[java.io.File] = None,
+    stockFile: Option[java.io.File] = None)
 
   val builder = OParser.builder[Parameter]
 
@@ -42,10 +43,12 @@ import scala.collection.mutable.ListBuffer
       programName("dingo-create"),
       opt[java.io.File]("mobilities").required().action((f, p) => p.copy(mobilitiesFile = Some(f))).text("mobilities file").required(),
       opt[java.io.File]("result").required().action((f, p) => p.copy(resultFile = Some(f))).text("result directory"),
-      opt[java.io.File]("census").required().action((f, p) => p.copy(censusFile = Some(f))).text("census file for initial population")
+      opt[java.io.File]("census").required().action((f, p) => p.copy(censusFile = Some(f))).text("census file for initial population"),
+      opt[java.io.File]("stock").required().action((f, p) => p.copy(stockFile = Some(f))).text("stock file for population evolution")
     )
 
-  type Index = Map[String, Int]
+  case class Index(index: Map[String, Int], reverse: Map[Int, String]):
+    export index.*
 
   OParser.parse(parser, args, Parameter()).foreach: parameter =>
     val resultDirectory = parameter.resultFile.get.toScala
@@ -67,15 +70,14 @@ import scala.collection.mutable.ListBuffer
       val keys: Seq[(String, Int)] = quadKeys.toSeq.zipWithIndex
       for (qk, i) <- keys
       do indexFile.appendLine(s"$qk,$i")
-      keys.toMap
+      Index(keys.toMap, keys.map(_.swap).toMap)
 
-    def generatePopulation(census: File, populationFile: File, index: Index) =
-      populationFile.clear() delete (swallowIOExceptions = true)
+    def parseCensus(census: File, index: Index) =
       var currentId = 0
 
-      census.lines.drop(1).foreach: l =>
+      census.lines.toSeq.drop(1).flatMap: l =>
         val columns = l.split(",")
-        index.get(columns(0)).foreach: qki =>
+        index.get(columns(0)).map: qki =>
           // Check id are sequential
           assert(qki == currentId)
           currentId += 1
@@ -85,11 +87,74 @@ import scala.collection.mutable.ListBuffer
             then 0.0
             else columns(1).toDouble
 
-          val s = (population * 0.2).round
-          val e = (population * 0.2).round
-          val i = (population * 0.2).round
-          val r = (population * 0.4).round
-          populationFile.append(s"$qki,$s,$e,$i,$r\n")
+          (qki, population)
+
+    def generateInitialPopulation(census: File, populationFile: File, index: Index) =
+      populationFile.clear() delete (swallowIOExceptions = true)
+      populationFile.appendLine("cell,S,E,I,R,population")
+      var currentId = 0
+
+      parseCensus(census, index).foreach: (qki, population) =>
+        val s = (population * 0.2).round
+        val e = (population * 0.2).round
+        val i = (population * 0.2).round
+        val r = (population * 0.4).round
+        populationFile.append(s"$qki,$s,$e,$i,$r,$population\n")
+
+
+    def generatePopulationDynamic(census: File, stock: File, populationDynamic: File, index: Index) =
+      populationDynamic.clear() delete (swallowIOExceptions = true)
+      populationDynamic.appendLine("cell,date,population")
+
+      def parseDate(d: String) =
+        val df = DateTimeFormatter.ofPattern("LLL yyyy", java.util.Locale.US)
+        val date = df.parse(d)
+        val month = date.get(java.time.temporal.ChronoField.MONTH_OF_YEAR)
+        val year = date.get(java.time.temporal.ChronoField.YEAR)
+        LocalDate.of(year, month, 1).toEpochDay
+
+      var currentId = 0
+
+      val content =
+        stock.lines.drop(1).flatMap: l =>
+          val columns = l.split(",")
+          index.get(columns(0)).map: qki =>
+            val date = parseDate(columns(1).filter(_ != '\"'))
+            val average = columns(2).toDouble
+            (qki, date, average)
+        .groupBy((qki, date, _) => (date, qki))
+
+
+      val allDates = content.keys.map(_._1).toSeq.distinct.sorted
+
+      val censusContent = parseCensus(census, index)
+
+      val initialDate = allDates.head
+
+      val initialPopulationFactor =
+        censusContent.flatMap: (qki, population) =>
+          content.get((initialDate, qki)).map: c =>
+            assert(c.size == 1)
+            qki -> population / c.head._3
+        .toMap
+
+      for
+        date <- allDates
+        (qki, population) <- censusContent
+      do
+        val stock = content.get((date, qki))
+        (stock.headOption, initialPopulationFactor.get(qki)) match
+          case (Some(s), Some(initialPopulation)) =>
+            assert(s.size == 1)
+            val adjusted = initialPopulation * s.head._3
+            populationDynamic.appendLine(s"$qki,$date,$adjusted")
+          case (None, Some(_)) =>
+            scribe.warn(s"no stock data found for date $date and quad key ${index.reverse(qki)}")
+            populationDynamic.appendLine(s"$qki,$date,$population")
+          case (_, None) =>
+            scribe.warn(s"no initial population data found for quad key ${index.reverse(qki)}")
+            populationDynamic.appendLine(s"$qki,$date,$population")
+
 
     def generateMoveListing(mobilities: File, matrixFile: File, index: Index) =
       matrixFile.gzipOutputStream().map(_.writer).foreach: matrix =>
@@ -135,47 +200,13 @@ import scala.collection.mutable.ListBuffer
           import io.circe.syntax.*
           matrix.append(MoveSlice(moves = moves.toSeq, date = date.toInt, second = second).asJson.noSpaces + "\n")
 
-
-//    def generateMatrix(index: Index) =
-//      val moveMatrixFile = resultDirectory / "move-matrix.mjson"
-//      moveMatrixFile.delete(swallowIOExceptions = true)
-//
-//      def movesFromCell(moves: Seq[Array[String]]) =
-//        moves.groupBy(_(0)).toSeq.sortBy(_(0))
-//
-//      def parseMoves(data: (String, Seq[Array[String]]), date: Long, time: Int, index: Index): Move =
-//        val (from, lines) = data
-//        val total = lines.map(_(3).toInt).sum
-//        val byDestination = lines.groupBy(l => index.get(l(1))).view.mapValues(_.map(_(3).toInt).sum.toDouble / total)
-//        val to = byDestination.toSeq.map((to, r) => Move.To(to, r))
-//        Move(from = index(from), to = to, date = date.toInt, second = time)
-//
-//      def nextStep(i: collection.BufferedIterator[Array[String]]) =
-//        val firstDate = i.head(2)
-//        val dateElements = firstDate.filterNot(_ == '"').split(" ")
-//        val df = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-//        val date = LocalDate.parse(dateElements(0), df).toEpochDay
-//        val generateCellIndextime = LocalTime.parse(dateElements(1)).toSecondOfDay
-//        (dingo.tool.iteratorTakeWhile(i, m => m(2) == firstDate), date, time)
-//
-//      val lineIterator = parameter.mobilitiesFile.get.toScala.lines.drop(1).iterator.map(_.split(",")).buffered
-//
-//      while
-//        lineIterator.hasNext
-//      do
-//        import io.circe.*
-//        import io.circe.syntax.*
-//
-//        val (slice, date, time) = nextStep(lineIterator)
-//        println(s"$date $time")
-//        val movesByCell = movesFromCell(slice)
-//
-//        moveMatrixFile.appendLine(movesByCell.map(parseMoves(_, date, time, index)).asJson.noSpaces)
-
     val index = generateCellIndex(parameter.mobilitiesFile.get.toScala)
 
     val populationFile = resultDirectory / "population.csv"
-    generatePopulation(parameter.censusFile.get.toScala, populationFile, index)
+    generateInitialPopulation(parameter.censusFile.get.toScala, populationFile, index)
+
+    val populationDynamic = resultDirectory / "population-dynamic.csv"
+    generatePopulationDynamic(parameter.censusFile.get.toScala, parameter.stockFile.get.toScala, populationDynamic, index)
 
     val moveMatrixFile = resultDirectory / "move-matrix.mjson.gz"
     generateMoveListing(parameter.mobilitiesFile.get.toScala, moveMatrixFile, index)

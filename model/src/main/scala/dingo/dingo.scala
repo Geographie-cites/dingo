@@ -62,6 +62,8 @@ def run(
       val m = moves.head
       (m.date, m.second)
 
+    scribe.info(s"first day $firstDay")
+
     val resultWriter = resultFile.map(_.toScala.newBufferedWriter)
     try simulation(world, modelParameters, firstDay, moves, resultWriter, random)
     finally
