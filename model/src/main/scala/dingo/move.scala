@@ -26,7 +26,10 @@ object move:
 
   case class Move(
     from: Int,
+    to: Seq[Move.To]) derives Codec.AsObject
+
+  case class MoveSlice(
     date: Int,
     second: Int,
-    to: Seq[Move.To]) derives Codec.AsObject
+    moves: Seq[Move]) derives Codec.AsObject
 

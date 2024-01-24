@@ -22,14 +22,17 @@ import scopt.*
 
 import java.time.format.DateTimeFormatter
 import java.time.{LocalDate, LocalTime}
-
 import dingo.move.*
+
+import scala.collection.mutable.ListBuffer
+
+
 
 @main def create(args: String*) =
   case class Parameter(
-    moveFile: Option[java.io.File] = None,
+    mobilitiesFile: Option[java.io.File] = None,
     resultFile: Option[java.io.File] = None,
-    initialPopulation: Option[Int] = None)
+    censusFile: Option[java.io.File] = None)
 
   val builder = OParser.builder[Parameter]
 
@@ -37,9 +40,9 @@ import dingo.move.*
     import builder._
     OParser.sequence(
       programName("dingo-create"),
-      opt[java.io.File]("move").required().action((f, p) => p.copy(moveFile = Some(f))).text("move file").required(),
+      opt[java.io.File]("mobilities").required().action((f, p) => p.copy(mobilitiesFile = Some(f))).text("mobilities file").required(),
       opt[java.io.File]("result").required().action((f, p) => p.copy(resultFile = Some(f))).text("result directory"),
-      opt[Int]("initial-population").required().action((f, p) => p.copy(initialPopulation = Some(f))).text("initial population")
+      opt[java.io.File]("census").required().action((f, p) => p.copy(censusFile = Some(f))).text("census file for initial population")
     )
 
   type Index = Map[String, Int]
@@ -48,14 +51,14 @@ import dingo.move.*
     val resultDirectory = parameter.resultFile.get.toScala
     resultDirectory.createDirectories()
 
-    def generateCellIndex: Index =
+    def generateCellIndex(mobilities: File): Index =
       val indexFile = resultDirectory / "cell-index.csv"
       indexFile.clear() delete(swallowIOExceptions = true)
 
       indexFile.appendLine("quadkey,index")
       val quadKeys = collection.mutable.TreeSet[String]()
 
-      for m <- parameter.moveFile.get.toScala.lines.drop(1)
+      for m <- mobilities.lines.drop(1)
       do
         val colums = m.split(",")
         quadKeys.add(colums(0))
@@ -66,65 +69,113 @@ import dingo.move.*
       do indexFile.appendLine(s"$qk,$i")
       keys.toMap
 
-    def generatePopulation(index: Index) =
-      val movesValue = parameter.moveFile.get.toScala.lines.drop(1).map(_.split(","))
-      val firstDate = movesValue.head(2)
-      val firstStep = movesValue.takeWhile(_(2) == firstDate)
+    def generatePopulation(census: File, populationFile: File, index: Index) =
+      populationFile.clear() delete (swallowIOExceptions = true)
+      var currentId = 0
 
-      val populationFile = resultDirectory / "population.csv"
-      populationFile.delete(swallowIOExceptions = true)
+      census.lines.drop(1).foreach: l =>
+        val columns = l.split(",")
+        index.get(columns(0)).foreach: qki =>
+          // Check id are sequential
+          assert(qki == currentId)
+          currentId += 1
 
-      populationFile.append("cell,S,E,I,R\n")
+          val population =
+            if columns(1) == "NA"
+            then 0.0
+            else columns(1).toDouble
 
-      val populationData = firstStep.groupBy(_(0)).map((k, v) => index(k) -> v.map(_(3).toInt).sum)
-      val scaling = parameter.initialPopulation.get.toDouble / populationData.values.sum
+          val s = (population * 0.2).round
+          val e = (population * 0.2).round
+          val i = (population * 0.2).round
+          val r = (population * 0.4).round
+          populationFile.append(s"$qki,$s,$e,$i,$r\n")
 
-      for index <- index.values.toSeq.sorted
-      do
-        val pop = populationData.getOrElse(index, 0)
-        val scaledPop = pop * scaling
-        val s = (scaledPop * 0.2).round
-        val e = (scaledPop * 0.2).round
-        val i = (scaledPop * 0.2).round
-        val r = (scaledPop * 0.4).round
-        populationFile.append(s"$index,$s,$e,$i,$r\n")
+    def generateMoveListing(mobilities: File, matrixFile: File, index: Index) =
+      matrixFile.gzipOutputStream().map(_.writer).foreach: matrix =>
+        def parseDate(d: String) =
+          val dateElements = d.filterNot(_ == '"').split(" ")
+          val df = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+          val date = LocalDate.parse(dateElements(0), df).toEpochDay
+          val second = LocalTime.parse(dateElements(1)).toSecondOfDay
+          (date, second)
 
-    def generateMatrix(index: Index) =
-      val moveMatrixFile = resultDirectory / "move-matrix.mjson"
-      moveMatrixFile.delete(swallowIOExceptions = true)
+        val dates =
+          mobilities.lines.head.split(",").zipWithIndex.drop(2).map: (d, i) =>
+            val (date, time) = parseDate(d)
+            (date, time, i)
 
-      def movesFromCell(moves: Seq[Array[String]]) =
-        moves.groupBy(_(0)).toSeq.sortBy(_(0))
+        def nextQK(f: collection.BufferedIterator[Array[String]]) =
+          val qk = f.head(0)
+          (qk, dingo.tool.iteratorTakeWhile(f, _(0) == qk).filter(_(2) != "NA"))
 
-      def parseMoves(data: (String, Seq[Array[String]]), date: Long, time: Int, index: Index): Move =
-        val (from, lines) = data
-        val total = lines.map(_(3).toInt).sum
-        val byDestination = lines.groupBy(l => index.get(l(1))).view.mapValues(_.map(_(3).toInt).sum.toDouble / total)
-        val to = byDestination.toSeq.map((to, r) => Move.To(to, r))
-        Move(from = index(from), to = to, date = date.toInt, second = time)
+        def buildMove(from: String, lines: Seq[Array[String]]): Move =
+          val total = lines.map(_(2).toInt).sum
+          val byDestination = lines.groupBy(l => index.get(l(1))).view.mapValues(_.map(_(2).toInt).sum.toDouble / total)
+          val to = byDestination.toSeq.map((to, r) => Move.To(to, r))
+          Move(from = index(from), to = to)
 
-      def nextStep(i: collection.BufferedIterator[Array[String]]) =
-        val firstDate = i.head(2)
-        val dateElements = firstDate.filterNot(_ == '"').split(" ")
-        val df = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-        val date = LocalDate.parse(dateElements(0), df).toEpochDay
-        val time = LocalTime.parse(dateElements(1)).toSecondOfDay
-        (dingo.tool.iteratorTakeWhile(i, m => m(2) == firstDate), date, time)
+        for
+          (date, second, i) <- dates
+        do
+          val mobilityIterator =
+            mobilities.lines.iterator.drop(1).map: l =>
+              val c = l.split(",")
+              Array(c(0), c(1), c(i))
+            .buffered
 
-      val lineIterator = parameter.moveFile.get.toScala.lines.drop(1).iterator.map(_.split(",")).buffered
+          val moves = ListBuffer[Move]()
 
-      while
-        lineIterator.hasNext
-      do
-        import io.circe.*
-        import io.circe.syntax.*
+          while mobilityIterator.hasNext
+          do
+            val (qk, qkData) = nextQK(mobilityIterator)
+            moves += buildMove(qk, qkData)
 
-        val (slice, date, time) = nextStep(lineIterator)
-        println(s"$date $time")
-        val movesByCell = movesFromCell(slice)
+          import io.circe.*
+          import io.circe.syntax.*
+          matrix.append(MoveSlice(moves = moves.toSeq, date = date.toInt, second = second).asJson.noSpaces + "\n")
 
-        moveMatrixFile.appendLine(movesByCell.map(parseMoves(_, date, time, index)).asJson.noSpaces)
 
-    val index = generateCellIndex
-    generatePopulation(index)
-    generateMatrix(index)
+//    def generateMatrix(index: Index) =
+//      val moveMatrixFile = resultDirectory / "move-matrix.mjson"
+//      moveMatrixFile.delete(swallowIOExceptions = true)
+//
+//      def movesFromCell(moves: Seq[Array[String]]) =
+//        moves.groupBy(_(0)).toSeq.sortBy(_(0))
+//
+//      def parseMoves(data: (String, Seq[Array[String]]), date: Long, time: Int, index: Index): Move =
+//        val (from, lines) = data
+//        val total = lines.map(_(3).toInt).sum
+//        val byDestination = lines.groupBy(l => index.get(l(1))).view.mapValues(_.map(_(3).toInt).sum.toDouble / total)
+//        val to = byDestination.toSeq.map((to, r) => Move.To(to, r))
+//        Move(from = index(from), to = to, date = date.toInt, second = time)
+//
+//      def nextStep(i: collection.BufferedIterator[Array[String]]) =
+//        val firstDate = i.head(2)
+//        val dateElements = firstDate.filterNot(_ == '"').split(" ")
+//        val df = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+//        val date = LocalDate.parse(dateElements(0), df).toEpochDay
+//        val generateCellIndextime = LocalTime.parse(dateElements(1)).toSecondOfDay
+//        (dingo.tool.iteratorTakeWhile(i, m => m(2) == firstDate), date, time)
+//
+//      val lineIterator = parameter.mobilitiesFile.get.toScala.lines.drop(1).iterator.map(_.split(",")).buffered
+//
+//      while
+//        lineIterator.hasNext
+//      do
+//        import io.circe.*
+//        import io.circe.syntax.*
+//
+//        val (slice, date, time) = nextStep(lineIterator)
+//        println(s"$date $time")
+//        val movesByCell = movesFromCell(slice)
+//
+//        moveMatrixFile.appendLine(movesByCell.map(parseMoves(_, date, time, index)).asJson.noSpaces)
+
+    val index = generateCellIndex(parameter.mobilitiesFile.get.toScala)
+
+    val populationFile = resultDirectory / "population.csv"
+    generatePopulation(parameter.censusFile.get.toScala, populationFile, index)
+
+    val moveMatrixFile = resultDirectory / "move-matrix.mjson.gz"
+    generateMoveListing(parameter.mobilitiesFile.get.toScala, moveMatrixFile, index)
