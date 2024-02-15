@@ -22,38 +22,39 @@ import java.nio.ByteBuffer
 
 import monocle.*
 import better.files.*
+import bytepack.*
 
 object agent:
+  type PopulationDynamic = collection.BufferedIterator[PopulationDynamic.PopulationPoint]
+
+  object PopulationDynamic:
+    case class PopulationPoint(date: Long, populations: Array[Double])
+
+    def parse(l: Array[String]) = PopulationPoint(l(0).toLong, l.drop(1).map(_.toDouble))
+    def withPopulationDynamic[T](file: java.io.File)(f: PopulationDynamic => T): T =
+      import scala.jdk.CollectionConverters.*
+      file.toScala.bufferedReader().map: r =>
+        val it = r.lines().iterator().asScala.map(l => parse(l.split(","))).buffered
+        f(it)
+      .get
+
   type Population = IArray[Human.Packed]
 
   object Human:
     object Serology:
       val noUpdate = -1.toByte
       
-    enum Serology:
+    enum Serology derives EnumMirror:
       case S, E, I, R
 
     opaque type Packed = IArray[Byte]
-    def packedSize = 4
+    def packedSize = Pack.size[Human]
 
-    def pack(h: Human): Packed =
-      val buffer = ByteBuffer.allocate(packedSize)
-      buffer put low.pack(h.location).unsafeArray
-      buffer put low.pack(h.serology.ordinal.toByte).unsafeArray
-      buffer put low.pack(h.update).unsafeArray
-      val res = buffer.array()
-      assert(res.size == packedSize)
-      IArray.unsafeFromArray(res)
+    def pack(h: Human): Packed = Pack.pack(h)
+    def unpack(b: Packed) = Pack.unpack[Human](b)
 
-    def unpack(b: Packed) =
-      Human(
-        location = unpackLocation(b),
-        serology = Human.Serology.fromOrdinal(low.extractByte(b, 2)),
-        update = unpackUpdate(b)
-      )
-
-    inline def unpackLocation(b: Packed) = low.extractShort(b, 0)
-    inline def unpackUpdate(b: Packed) = low.extractByte(b, 3)
+    inline def unpackLocation(b: Packed) = BytePack.extractShort(b)
+    inline def unpackUpdate(b: Packed) = BytePack.extractByte(b, Pack.indexOf[Human](2))
 
     val packedIso = Iso[Human, Packed](pack)(unpack)
     val location = packedIso.reverse andThen Focus[Human](_.location)
@@ -80,4 +81,4 @@ object agent:
       IArray.unsafeFromArray(population.toArray)
 
 
-  case class Human(location: Short, serology: Human.Serology, update: Byte)
+  case class Human(location: Short, serology: Human.Serology, update: Byte) derives Pack

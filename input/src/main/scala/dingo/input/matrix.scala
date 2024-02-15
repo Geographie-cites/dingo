@@ -101,10 +101,8 @@ import scala.collection.mutable.ListBuffer
         val r = (population * 0.4).round
         populationFile.append(s"$qki,$s,$e,$i,$r,$population\n")
 
-
     def generatePopulationDynamic(census: File, stock: File, populationDynamic: File, index: Index) =
       populationDynamic.clear() delete (swallowIOExceptions = true)
-      populationDynamic.appendLine("cell,date,population")
 
       def parseDate(d: String) =
         val df = DateTimeFormatter.ofPattern("LLL yyyy", java.util.Locale.US)
@@ -140,21 +138,25 @@ import scala.collection.mutable.ListBuffer
 
       for
         date <- allDates
-        (qki, population) <- censusContent
       do
-        val stock = content.get((date, qki))
-        (stock.headOption, initialPopulationFactor.get(qki)) match
-          case (Some(s), Some(initialPopulation)) =>
-            assert(s.size == 1)
-            val adjusted = initialPopulation * s.head._3
-            populationDynamic.appendLine(s"$qki,$date,$adjusted")
-          case (None, Some(_)) =>
-            scribe.warn(s"no stock data found for date $date and quad key ${index.reverse(qki)}")
-            populationDynamic.appendLine(s"$qki,$date,$population")
-          case (_, None) =>
-            scribe.warn(s"no initial population data found for quad key ${index.reverse(qki)}")
-            populationDynamic.appendLine(s"$qki,$date,$population")
-
+        val populations =
+          censusContent.map: (qki, population) =>
+            val stock = content.get((date, qki))
+            (stock.headOption, initialPopulationFactor.get(qki)) match
+              case (Some(s), Some(initialPopulation)) =>
+                assert(s.size == 1)
+                initialPopulation * s.head._3
+                //populationDynamic.appendLine(s"$qki,$date,$adjusted")
+              case (None, Some(_)) =>
+                scribe.warn(s"no stock data found for date $date and quad key ${index.reverse(qki)}, $population")
+                population
+                //populationDynamic.appendLine(s"$qki,$date,$population")
+              case (_, None) =>
+                scribe.warn(s"no initial population data found for quad key ${index.reverse(qki)}, $population")
+                //populationDynamic.appendLine(s"$qki,$date,$population")
+                population
+        assert(populations.size == index.size)
+        populationDynamic.appendLine(s"$date,${populations.mkString(",")}")
 
     def generateMoveListing(mobilities: File, matrixFile: File, index: Index) =
       matrixFile.gzipOutputStream().map(_.writer).foreach: matrix =>

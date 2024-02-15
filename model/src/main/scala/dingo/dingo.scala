@@ -20,7 +20,7 @@ package dingo
 
 import java.io.{File, Writer}
 import better.files.*
-import dingo.agent.Human
+import dingo.agent.*
 import dingo.agent.Human.{Serology, serology}
 import dingo.move.*
 
@@ -42,6 +42,7 @@ def run(
   cellIndex: File,
   cellTypology: File,
   populationFile: File,
+  populationDynamicFile: File,
   moveMatrixFile: File,
   resultFile: Option[File],
   random: Random) =
@@ -50,26 +51,28 @@ def run(
   def population = Human.read(populationFile.toScala, modelParameters)
   def world = World(cells, population)
 
-  moveMatrixFile.toScala.gzipInputStream().map(_.reader().buffered).map: reader =>
-    val moves =
-      import scala.jdk.CollectionConverters.*
-      reader.lines().iterator().asScala.map: l =>
-        import io.circe.*
-        parser.decode[MoveSlice](l).toTry.get
-      .buffered
 
-    val (firstDay, second) =
-      val m = moves.head
-      (m.date, m.second)
+  PopulationDynamic.withPopulationDynamic(populationDynamicFile): populationDynamic =>
+    moveMatrixFile.toScala.gzipInputStream().map(_.reader().buffered).map: reader =>
+      val moves =
+        import scala.jdk.CollectionConverters.*
+        reader.lines().iterator().asScala.map: l =>
+          import io.circe.*
+          parser.decode[MoveSlice](l).toTry.get
+        .buffered
 
-    scribe.info(s"first day $firstDay")
+      val (firstDay, second) =
+        val m = moves.head
+        (m.date, m.second)
 
-    val resultWriter = resultFile.map(_.toScala.newBufferedWriter)
-    try simulation(world, modelParameters, firstDay, moves, resultWriter, random)
-    finally
-      resultWriter.foreach(_.close())
+      scribe.info(s"first day $firstDay")
 
-def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, moves: Iterator[MoveSlice], resultWriter: Option[Writer], random: Random) =
+      val resultWriter = resultFile.map(_.toScala.newBufferedWriter)
+      try simulation(world, modelParameters, firstDay, moves, populationDynamic, resultWriter, random)
+      finally
+        resultWriter.foreach(_.close())
+
+def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, moves: Iterator[MoveSlice], populationDynamic: PopulationDynamic, resultWriter: Option[Writer], random: Random) =
   def time(t: Int) =
     if t % 2 == 0
     then (t / 2 + firstDay, 0)
@@ -157,22 +160,37 @@ def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, mo
       contaminateHuman andThen
       moveAgents(moves)
 
-  @tailrec def step(world: World, t: Int, moves: Iterator[MoveSlice]): World =
-
+  @tailrec def step(w1: World, t: Int, moves: collection.BufferedIterator[MoveSlice], populationDynamic: PopulationDynamic): World =
     val (day, sec) = time(t)
 
     if sec == 0
     then
       resultWriter.foreach: w =>
         for
-          (c, i) <- World.countByCell(world).zipWithIndex
+          (c, i) <- World.countByCell(w1).zipWithIndex
         do w.append(s"$day,$sec,$i,${c.susceptible},${c.exposed},${c.infected},${c.recovered}\n")
 
+    val w2 =
+      if sec == 0 && populationDynamic.head.date == day
+      then
+        val populations = populationDynamic.next()
+        info(s"update populations ${populationDynamic}")
+        world
+      else world
+
     if !moves.hasNext
-    then world
+    then w2
     else
       info(s"simulate day $day sec $sec")
-      val newWorld = evolve(t, moves.next())(world)
-      step(newWorld, t + 1, moves)
+      val move = moves.head
+      if move.second == sec && move.date == day
+      then
+        val newWorld = evolve(t, move)(w2)
+        moves.next()
+        step(newWorld, t + 1, moves, populationDynamic)
+      else
+        info(s"skipping step: no move found for day $day sec $sec")
+        step(w2, t + 1, moves, populationDynamic)
 
-  step(world, 0, moves)
+
+  step(world, 0, moves.buffered, populationDynamic)

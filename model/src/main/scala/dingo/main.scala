@@ -41,13 +41,14 @@ case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: I
 
 @main def model(args: String*) =
   case class Parameter(
-                        cellIndex: Option[File] = None,
-                        cellTypology: Option[File] = None,
-                        population: Option[File] = None,
-                        moveMatrix: Option[File] = None,
-                        modelParameters: Option[File] = None,
-                        resultFile: Option[File] = None,
-                        log: Boolean = false)
+    cellIndex: Option[File] = None,
+    cellTypology: Option[File] = None,
+    population: Option[File] = None,
+    populationDynamic: Option[File] = None,
+    moveMatrix: Option[File] = None,
+    modelParameters: Option[File] = None,
+    resultFile: Option[File] = None,
+    log: Boolean = false)
 
   val builder = OParser.builder[Parameter]
 
@@ -60,6 +61,7 @@ case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: I
       opt[File]("result").action((f, p) => p.copy(resultFile = Some(f))).text("result file"),
       opt[File]("parameters").required().action((f, p) => p.copy(modelParameters = Some(f))).text("parameters file for the model"),
       opt[File]("population").required().action((f, p) => p.copy(population = Some(f))).text("population file"),
+      opt[File]("population-dynamic").required().action((f, p) => p.copy(populationDynamic = Some(f))).text("population dynamic file"),
       opt[File]("move-matrix").required().action((f, p) => p.copy(moveMatrix = Some(f))).text("move matrix file"),
       opt[Unit](name = "log").action((f, p) => p.copy(log = true))
     )
@@ -79,6 +81,7 @@ case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: I
       cellIndex = parameter.cellIndex.get,
       cellTypology = parameter.cellTypology.get,
       populationFile = parameter.population.get,
+      populationDynamicFile = parameter.populationDynamic.get,
       moveMatrixFile = parameter.moveMatrix.get,
       resultFile = parameter.resultFile,
       random = random)

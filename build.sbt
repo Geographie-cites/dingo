@@ -31,7 +31,7 @@ lazy val model = project
       //"io.circe" %% "circe-generic-extras"
     ).map(_ % "0.14.6"),
 
-
+    libraryDependencies += "org.openmole" %% "byte-pack" % "0.1"
     //containerBuildImage := Some("ghcr.io/graalvm/jdk-community:21")
 
   )
