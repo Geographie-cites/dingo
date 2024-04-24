@@ -41,11 +41,8 @@ case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: I
 
 @main def model(args: String*) =
   case class Parameter(
-    cellIndex: Option[File] = None,
     cellTypology: Option[File] = None,
-    population: Option[File] = None,
-    populationDynamic: Option[File] = None,
-    moveMatrix: Option[File] = None,
+    dataDirectory: Option[File] = None,
     modelParameters: Option[File] = None,
     resultFile: Option[File] = None,
     log: Boolean = false)
@@ -56,13 +53,10 @@ case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: I
     import builder._
     OParser.sequence(
       programName("dingo"),
-      opt[File]("cell-index").required().action((f, p) => p.copy(cellIndex = Some(f))).text("cell index file").required(),
       opt[File]("cell-typology").required().action((f, p) => p.copy(cellTypology = Some(f))).text("cell typology file").required(),
       opt[File]("result").action((f, p) => p.copy(resultFile = Some(f))).text("result file"),
       opt[File]("parameters").required().action((f, p) => p.copy(modelParameters = Some(f))).text("parameters file for the model"),
-      opt[File]("population").required().action((f, p) => p.copy(population = Some(f))).text("population file"),
-      opt[File]("population-dynamic").required().action((f, p) => p.copy(populationDynamic = Some(f))).text("population dynamic file"),
-      opt[File]("move-matrix").required().action((f, p) => p.copy(moveMatrix = Some(f))).text("move matrix file"),
+      opt[File]("data").required().action((f, p) => p.copy(dataDirectory = Some(f))).text("population file"),
       opt[Unit](name = "log").action((f, p) => p.copy(log = true))
     )
 
@@ -78,11 +72,8 @@ case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: I
 
     run(
       modelParameters = modelParameters,
-      cellIndex = parameter.cellIndex.get,
       cellTypology = parameter.cellTypology.get,
-      populationFile = parameter.population.get,
-      populationDynamicFile = parameter.populationDynamic.get,
-      moveMatrixFile = parameter.moveMatrix.get,
+      dataDirectory = parameter.dataDirectory.get,
       resultFile = parameter.resultFile,
       random = random)
 

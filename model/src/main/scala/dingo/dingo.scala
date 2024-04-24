@@ -39,21 +39,18 @@ import scala.annotation.tailrec
 
 def run(
   modelParameters: ModelParameters,
-  cellIndex: File,
   cellTypology: File,
-  populationFile: File,
-  populationDynamicFile: File,
-  moveMatrixFile: File,
+  dataDirectory: File,
   resultFile: Option[File],
   random: Random) =
-  val cells: IArray[Cell] = World.readCells(cellIndex.toScala)
+  val cells: IArray[Cell] = World.readCells(dataDirectory.toScala / dingo.data.cellIndex)
 
-  def population = Human.read(populationFile.toScala, modelParameters)
+  def population = Human.read(dataDirectory.toScala / dingo.data.populationFile, modelParameters)
   def world = World(cells, population)
 
 
-  PopulationDynamic.withPopulationDynamic(populationDynamicFile): populationDynamic =>
-    moveMatrixFile.toScala.gzipInputStream().map(_.reader().buffered).map: reader =>
+  PopulationDynamic.withPopulationDynamic((dataDirectory.toScala / dingo.data.populationDynamic).toJava): populationDynamic =>
+    (dataDirectory.toScala / dingo.data.moveMatrixFile).gzipInputStream().map(_.reader().buffered).map: reader =>
       val moves =
         import scala.jdk.CollectionConverters.*
         reader.lines().iterator().asScala.map: l =>

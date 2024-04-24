@@ -55,7 +55,7 @@ import scala.collection.mutable.ListBuffer
     resultDirectory.createDirectories()
 
     def generateCellIndex(mobilities: File): Index =
-      val indexFile = resultDirectory / "cell-index.csv"
+      val indexFile = resultDirectory / dingo.data.cellIndex
       indexFile.clear() delete(swallowIOExceptions = true)
 
       indexFile.appendLine("quadkey,index")
@@ -204,11 +204,11 @@ import scala.collection.mutable.ListBuffer
 
     val index = generateCellIndex(parameter.mobilitiesFile.get.toScala)
 
-    val populationFile = resultDirectory / "population.csv"
+    val populationFile = resultDirectory / dingo.data.populationFile
     generateInitialPopulation(parameter.censusFile.get.toScala, populationFile, index)
 
-    val populationDynamic = resultDirectory / "population-dynamic.csv"
+    val populationDynamic = resultDirectory / dingo.data.populationDynamic
     generatePopulationDynamic(parameter.censusFile.get.toScala, parameter.stockFile.get.toScala, populationDynamic, index)
 
-    val moveMatrixFile = resultDirectory / "move-matrix.mjson.gz"
+    val moveMatrixFile = resultDirectory / dingo.data.moveMatrixFile
     generateMoveListing(parameter.mobilitiesFile.get.toScala, moveMatrixFile, index)
