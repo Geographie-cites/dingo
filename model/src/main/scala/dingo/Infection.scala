@@ -17,11 +17,7 @@ package dingo
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-object data:
-  def populationFile = "population.csv"
-  def populationDynamic = "population-dynamic.csv"
-  def moveMatrixFile = "move-matrix.mjson.gz"
-  def cellIndex = "cell-index.csv"
-  def infectionFile = "infections.mjson.gz"
-  
-  
+import io.circe.Codec
+
+object infection:
+  case class InfectionSlice(date: Int, infection: Seq[Int]) derives Codec.AsObject

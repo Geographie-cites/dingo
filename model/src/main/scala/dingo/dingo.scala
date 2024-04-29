@@ -26,8 +26,6 @@ import dingo.move.*
 
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
-//import dingo.stock.{Integration, Stock}
-//import dingo.stock.Stock.DynamicEquation
 import scopt.*
 import scribe.*
 import space.*
@@ -36,6 +34,10 @@ import io.circe.generic.auto.*
 import io.circe.yaml
 
 import scala.annotation.tailrec
+
+enum DayTime(val second: Int):
+  case Night extends DayTime(0)
+  case Morning extends DayTime(8 * 3600)
 
 def run(
   modelParameters: ModelParameters,
@@ -48,34 +50,32 @@ def run(
   def population = Human.read(dataDirectory.toScala / dingo.data.populationFile, modelParameters)
   def world = World(cells, population)
 
-
   PopulationDynamic.withPopulationDynamic((dataDirectory.toScala / dingo.data.populationDynamic).toJava): populationDynamic =>
     (dataDirectory.toScala / dingo.data.moveMatrixFile).gzipInputStream().map(_.reader().buffered).map: reader =>
       val moves =
         import scala.jdk.CollectionConverters.*
-        reader.lines().iterator().asScala.map: l =>
+        reader.lines().iterator().asScala.filter(_.trim.nonEmpty).map: l =>
           import io.circe.*
           parser.decode[MoveSlice](l).toTry.get
         .buffered
 
-      val (firstDay, second) =
+      val (moveFirstDay, second) =
         val m = moves.head
         (m.date, m.second)
 
-      scribe.info(s"first day $firstDay")
+      scribe.info(s"move first day $moveFirstDay")
+
+      // Skip early population dynamic
+      tool.iteratorTakeWhile(populationDynamic, _.date < moveFirstDay)
 
       val resultWriter = resultFile.map(_.toScala.newBufferedWriter)
-      try simulation(world, modelParameters, firstDay, moves, populationDynamic, resultWriter, random)
+      try simulation(world, modelParameters, moveFirstDay, moves, populationDynamic, resultWriter, random)
       finally
         resultWriter.foreach(_.close())
 
-def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, moves: Iterator[MoveSlice], populationDynamic: PopulationDynamic, resultWriter: Option[Writer], random: Random) =
-  def time(t: Int) =
-    if t % 2 == 0
-    then (t / 2 + firstDay, 0)
-    else (t / 2 + firstDay, 8 * 3600)
-
-  def contaminateHuman(world: World) =
+def contaminateHuman(modelParameters: ModelParameters, dayTime: DayTime, random: Random)(world: World) =
+  if dayTime == DayTime.Morning
+  then
     val infected = Array.ofDim[Int](world.cells.length)
     val total = Array.ofDim[Int](world.cells.length)
 
@@ -93,101 +93,134 @@ def simulation(world: World, modelParameters: ModelParameters, firstDay: Int, mo
           case Serology.S =>
             val ratio = infected(humanValue.location).toDouble / total(humanValue.location)
             val newHuman =
-              if random.nextDouble() < ratio * modelParameters.contamination then humanValue.copy(serology = Serology.E, update = modelParameters.exposedDuration.toByte)
+              if random.nextDouble() < ratio * modelParameters.contamination
+              then humanValue.copy(serology = Serology.E, update = modelParameters.exposedDuration.toByte)
               else humanValue
             Human.pack(newHuman)
           case _ => h
 
     world.copy(population = newPopulation)
+  else world
 
+def updateSerology(modelParameters: ModelParameters, dayTime: DayTime)(world: World) =
+  def newPopulation =
+    world.population.map: h =>
+      val update = Human.unpackUpdate(h)
+      if update == Serology.noUpdate
+      then h
+      else
+        if update == 0
+        then
+          Human.packedIso.reverse.modify: h =>
+            h.serology match
+              case Serology.E => h.copy(serology = Serology.I, update = modelParameters.infectedDuration.toByte)
+              case Serology.I => h.copy(serology = Serology.R, update = Serology.noUpdate)
+              case s => throw new RuntimeException(s"Serology $s is not supposed to be updated")
+          .apply(h)
+        else Human.packedIso.reverse.modify(h => h.copy(update = (h.update - 1).toByte))(h)
 
-  def updateSerology(sec: Int)(world: World) =
-    def newPopulation =
-      world.population.map: h =>
-        val update = Human.unpackUpdate(h)
-        if update == Serology.noUpdate
-        then h
-        else
-          if update == 0
-          then
-            Human.packedIso.reverse.modify: h =>
-              h.serology match
-                case Serology.E => h.copy(serology = Serology.I, update = modelParameters.infectedDuration.toByte)
-                case Serology.I => h.copy(serology = Serology.R, update = Serology.noUpdate)
-                case s => throw new RuntimeException(s"Serology $s is not supposed to be updated")
-            .apply(h)
-          else Human.packedIso.reverse.modify(h => h.copy(update = (h.update - 1).toByte))(h)
+  if dayTime == DayTime.Night
+  then world.copy(population = newPopulation)
+  else world
 
-    if sec == 0
-    then world.copy(population = newPopulation)
-    else world
+def moveAgents(moves: MoveSlice, random: Random)(world: World): World =
+  val indexedPopulation = World.indexPopulation(world)
+  val newPopulation = new ArrayBuffer[Human.Packed](world.population.length)
 
-  def moveAgents(moves: MoveSlice)(world: World): World =
-    val indexedPopulation = World.indexPopulation(world)
-    val newPopulation = new ArrayBuffer[Human.Packed](world.population.length)
+  for
+    (cell, m) <- (0 until world.cells.length) zip moves.moves
+  do
+    assert(m.from == cell)
+    val cellPopulation = random.shuffle(indexedPopulation(cell))
+    val cellSize = cellPopulation.size
 
-    for
-      (cell, m) <- (0 until world.cells.length) zip moves.moves
+    val populationIterator = cellPopulation.iterator
+    for to <- random.shuffle(m.to)
     do
-      assert(m.from == cell)
-      val cellPopulation = random.shuffle(indexedPopulation(cell))
-      val cellSize = cellPopulation.size
+      val moving = populationIterator.take(Math.round(to.ratio * cellSize).toInt)
+      to.destination match
+        case Some(destination) => newPopulation.addAll(moving.map(Human.location.replace(destination.toShort)))
+        case None =>
+          // For now exiting agents are keep steady
+          newPopulation.addAll(moving)
 
-      val populationIterator = cellPopulation.iterator
-      for to <- random.shuffle(m.to)
-      do
-        val moving = populationIterator.take(Math.round(to.ratio * cellSize).toInt)
-        to.destination match
-          case Some(destination) => newPopulation.addAll(moving.map(Human.location.replace(destination.toShort)))
-          case None =>
-            // For now exiting agents are keep steady
-            newPopulation.addAll(moving)
+    newPopulation.addAll(populationIterator)
 
-      newPopulation.addAll(populationIterator)
+  assert(newPopulation.length == world.population.length, s"${newPopulation.length} ${world.population.length}")
+  world.copy(population = IArray.unsafeFromArray(newPopulation.toArray))
 
-    assert(newPopulation.length == world.population.length, s"${newPopulation.length} ${world.population.length}")
 
-    world.copy(population = IArray.unsafeFromArray(newPopulation.toArray))
+def updatePopulation(point: PopulationDynamic.PopulationPoint, random: Random)(world: World): World =
+  val indexedPopulation = World.indexPopulation(world)
+  val newPopulation: Array[Human.Packed] =
+    (point._2 zip indexedPopulation).flatMap: (q, population) =>
+      val localPopulationSize = population.length
+      val diff = q - localPopulationSize
+      if diff < 0
+      then random.shuffle(population).drop(-diff.toInt)
+      else
+        val addedIndividuals: Seq[Human.Packed] =
+          (0 until diff.toInt).map: _ =>
+            if localPopulationSize > 0
+            then
+              val element = random.nextInt(population.length)
+              population(element)
+            else
+              val element = random.nextInt(world.population.length)
+              world.population(element)
 
-  def evolve(t: Int, moves: MoveSlice): World => World =
-    val (d, s) = time(t)
-    assert(moves.second == s && moves.date == d, s"${moves.second} ${moves.date} $s $d")
+        addedIndividuals ++ population
 
-    updateSerology(s) andThen
-      contaminateHuman andThen
-      moveAgents(moves)
+  world.copy(population = IArray.unsafeFromArray(newPopulation))
+
+def simulation(world: World, modelParameters: ModelParameters, moveFirstDay: Int, moves: Iterator[MoveSlice], populationDynamic: PopulationDynamic, resultWriter: Option[Writer], random: Random) =
 
   @tailrec def step(w1: World, t: Int, moves: collection.BufferedIterator[MoveSlice], populationDynamic: PopulationDynamic): World =
-    val (day, sec) = time(t)
+    def time(firstDay: Int, t: Int) =
+      if t % 2 == 0
+      then (t / 2 + firstDay, DayTime.Night)
+      else (t / 2 + firstDay, DayTime.Morning)
 
-    if sec == 0
-    then
-      resultWriter.foreach: w =>
-        for
-          (c, i) <- World.countByCell(w1).zipWithIndex
-        do w.append(s"$day,$sec,$i,${c.susceptible},${c.exposed},${c.infected},${c.recovered}\n")
+    val (day, dayTime) = time(moveFirstDay, t)
+
+  //    if sec == 0
+  //    then
+  //      resultWriter.foreach: w =>
+  //        for
+  //          (c, i) <- World.countByCell(w1).zipWithIndex
+  //        do w.append(s"$day,$sec,$i,${c.susceptible},${c.exposed},${c.infected},${c.recovered}\n")
 
     val w2 =
-      if sec == 0 && populationDynamic.head.date == day
-      then
-        val populations = populationDynamic.next()
-        info(s"update populations ${populationDynamic}")
-        world
-      else world
+      populationDynamic.headOption match
+        case Some(pd) if dayTime == DayTime.Night && pd.date == day =>
+          val w = updatePopulation(pd, random)(w1)
+          if populationDynamic.hasNext then populationDynamic.next()
+          info(s"update population for ${w1.population.length} to ${w.population.length}")
+          w
+        case _ => w1
 
     if !moves.hasNext
     then w2
     else
-      info(s"simulate day $day sec $sec")
+      info(s"simulate day $day $dayTime, total population ${w2.population.length}")
       val move = moves.head
-      if move.second == sec && move.date == day
+      if move.second == dayTime.second && move.date == day
       then
-        val newWorld = evolve(t, move)(w2)
+        def evolve =
+          updateSerology(modelParameters, dayTime) andThen
+            contaminateHuman(modelParameters, dayTime, random) andThen
+            moveAgents(move, random)
+
+        val newWorld = evolve(w2)
         moves.next()
         step(newWorld, t + 1, moves, populationDynamic)
       else
-        info(s"skipping step: no move found for day $day sec $sec")
-        step(w2, t + 1, moves, populationDynamic)
+        info(s"skipping move in step $day $dayTime: no moves found")
+        def evolve =
+          updateSerology(modelParameters, dayTime) andThen
+            contaminateHuman(modelParameters, dayTime, random)
 
+        val newWorld = evolve(w2)
+        step(newWorld, t + 1, moves, populationDynamic)
 
   step(world, 0, moves.buffered, populationDynamic)

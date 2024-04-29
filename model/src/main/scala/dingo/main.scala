@@ -36,7 +36,12 @@ import io.circe.yaml
 
 import scala.annotation.tailrec
 
-case class ModelParameters(seed: Long, exposedDuration: Int, infectedDuration: Int, contamination: Double)
+case class ModelParameters(
+  seed: Long,
+  exposedDuration: Int,
+  infectedDuration: Int,
+  contamination: Double,
+  serology: Array[Array[Double]])
 
 
 @main def model(args: String*) =
