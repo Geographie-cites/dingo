@@ -18,7 +18,6 @@ package dingo.input
  */
 
 import better.files.*
-import dingo.infection.InfectionSlice
 import scopt.*
 
 import java.time.format.DateTimeFormatter
@@ -140,7 +139,7 @@ import scala.collection.mutable.ListBuffer
         val populations =
           censusContent.zipWithIndex.map: (population, qki) =>
             val stock = content.get((date, qki))
-            (stock.headOption, initialPopulationFactor.get(qki)) match
+            (stock, initialPopulationFactor.get(qki)) match
               case (Some(s), Some(initialPopulation)) =>
                 assert(s.size == 1)
                 initialPopulation * s.head._3
@@ -206,32 +205,29 @@ import scala.collection.mutable.ListBuffer
         val dateElements = d.filterNot(_ == '"').split(" ")
         val df = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         val date = LocalDate.parse(dateElements(0), df).toEpochDay
-        date
+        val year = LocalDate.parse(dateElements(0), df).getYear
+        (date, year)
 
-      infectionOutputFile.gzipOutputStream().foreach: infections =>
-        val dates =
-          inputInfectionFile.lines.head.split(",").zipWithIndex.drop(2).map: (d, i) =>
-            val date = parseDashedDate(d)
-            (date, i)
+      val dates =
+        inputInfectionFile.lines.head.split(",").zipWithIndex.drop(2).map: (d, i) =>
+          val date = parseDashedDate(d)._1
+          (date, i)
 
-        for
-          (date, i) <- dates
-        do
-          val qkInfection =
-            inputInfectionFile.lines.iterator.drop(1).map: l =>
-              val c = l.split(",")
-              (c(0), c(i))
-            .toMap
+      for
+        (date, i) <- dates
+      do
+        val qkInfection =
+          inputInfectionFile.lines.iterator.drop(1).map: l =>
+            val c = l.split(",")
+            (c(0), c(i))
+          .toMap
 
-          val cases = index.all.map: qk =>
-            qkInfection.get(qk) match
-              case Some(s) => if s == "NA" then 0 else s.toInt
-              case None => 0
+        val cases = index.all.map: qk =>
+          qkInfection.get(qk) match
+            case Some(s) => if s == "NA" then 0 else s.toInt
+            case None => 0
 
-          import io.circe.*
-          import io.circe.syntax.*
-          infections.printWriter(true).println(InfectionSlice(date.toInt, cases).asJson.noSpaces)
-
+        infectionOutputFile.appendLine(s"${date.toInt},${cases.mkString(",")}")
 
 
     val index = generateCellIndex(parameter.mobilitiesFile.get.toScala)

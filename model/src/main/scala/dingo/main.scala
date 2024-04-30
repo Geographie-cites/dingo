@@ -40,7 +40,7 @@ case class ModelParameters(
   seed: Long,
   exposedDuration: Int,
   infectedDuration: Int,
-  contamination: Double,
+  contamination: Array[Double],
   serology: Array[Array[Double]])
 
 

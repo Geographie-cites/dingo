@@ -22,6 +22,6 @@ object data:
   def populationDynamic = "population-dynamic.csv"
   def moveMatrixFile = "move-matrix.mjson.gz"
   def cellIndex = "cell-index.csv"
-  def infectionFile = "infections.mjson.gz"
+  def infectionFile = s"infections.csv"
   
   

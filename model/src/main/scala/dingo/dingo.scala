@@ -47,6 +47,9 @@ def run(
   random: Random) =
   val cells: IArray[Cell] = World.readCells(dataDirectory.toScala / dingo.data.cellIndex)
 
+  assert(modelParameters.serology.length == cells.size, s"${modelParameters.serology.length} == ${cells.size}")
+  assert(modelParameters.contamination.length == cells.size, s"${modelParameters.contamination.length} == ${cells.size}")
+
   def population = Human.read(dataDirectory.toScala / dingo.data.populationFile, modelParameters)
   def world = World(cells, population)
 
@@ -73,11 +76,12 @@ def run(
       finally
         resultWriter.foreach(_.close())
 
-def contaminateHuman(modelParameters: ModelParameters, dayTime: DayTime, random: Random)(world: World) =
+def contaminateHuman(modelParameters: ModelParameters, day: Int, dayTime: DayTime, random: Random, resultWriter: Option[Writer])(world: World) =
   if dayTime == DayTime.Morning
   then
     val infected = Array.ofDim[Int](world.cells.length)
     val total = Array.ofDim[Int](world.cells.length)
+    val newInfections = Array.ofDim[Int](world.cells.length)
 
     world.population.foreach: h =>
       val humanValue = Human.packedIso.reverse.get(h)
@@ -93,11 +97,16 @@ def contaminateHuman(modelParameters: ModelParameters, dayTime: DayTime, random:
           case Serology.S =>
             val ratio = infected(humanValue.location).toDouble / total(humanValue.location)
             val newHuman =
-              if random.nextDouble() < ratio * modelParameters.contamination
-              then humanValue.copy(serology = Serology.E, update = modelParameters.exposedDuration.toByte)
+              if random.nextDouble() < ratio * modelParameters.contamination(humanValue.location)
+              then
+                newInfections(humanValue.location) = newInfections(humanValue.location) + 1
+                humanValue.copy(serology = Serology.E, update = modelParameters.exposedDuration.toByte)
               else humanValue
             Human.pack(newHuman)
           case _ => h
+
+    resultWriter.foreach: w =>
+      w.append(s"$day,${newInfections.mkString(",")}\n")
 
     world.copy(population = newPopulation)
   else world
@@ -183,13 +192,6 @@ def simulation(world: World, modelParameters: ModelParameters, moveFirstDay: Int
 
     val (day, dayTime) = time(moveFirstDay, t)
 
-  //    if sec == 0
-  //    then
-  //      resultWriter.foreach: w =>
-  //        for
-  //          (c, i) <- World.countByCell(w1).zipWithIndex
-  //        do w.append(s"$day,$sec,$i,${c.susceptible},${c.exposed},${c.infected},${c.recovered}\n")
-
     val w2 =
       populationDynamic.headOption match
         case Some(pd) if dayTime == DayTime.Night && pd.date == day =>
@@ -208,7 +210,7 @@ def simulation(world: World, modelParameters: ModelParameters, moveFirstDay: Int
       then
         def evolve =
           updateSerology(modelParameters, dayTime) andThen
-            contaminateHuman(modelParameters, dayTime, random) andThen
+            contaminateHuman(modelParameters, day, dayTime, random, resultWriter) andThen
             moveAgents(move, random)
 
         val newWorld = evolve(w2)
@@ -218,7 +220,7 @@ def simulation(world: World, modelParameters: ModelParameters, moveFirstDay: Int
         info(s"skipping move in step $day $dayTime: no moves found")
         def evolve =
           updateSerology(modelParameters, dayTime) andThen
-            contaminateHuman(modelParameters, dayTime, random)
+            contaminateHuman(modelParameters, day, dayTime, random, resultWriter)
 
         val newWorld = evolve(w2)
         step(newWorld, t + 1, moves, populationDynamic)
