@@ -37,7 +37,6 @@ import io.circe.yaml
 import scala.annotation.tailrec
 
 case class ModelParameters(
-  seed: Long,
   exposedDuration: Int,
   infectedDuration: Int,
   contamination: Array[Double],
@@ -73,7 +72,7 @@ case class ModelParameters(
     val modelParameters =
       yaml.parser.parse(parameter.modelParameters.get.toScala.contentAsString).toTry.get.as[ModelParameters].toTry.get
 
-    val random = scala.util.Random(modelParameters.seed)
+    val random = scala.util.Random(42)
 
     run(
       modelParameters = modelParameters,

@@ -61,7 +61,7 @@ object agent:
     val serology = packedIso.reverse andThen Focus[Human](_.serology)
 
     def read(populationFile: File, parameters: ModelParameters): Population =
-      val serologyRatio = parameters.serology
+      val serologyRatio = parameters.serology.map(s => s.map(_ / s.sum))
       val population = new collection.mutable.ArrayBuffer[Human.Packed](10000000)
 
       for
